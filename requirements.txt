@@ -1,0 +1,12 @@
+torch
+torchaudio
+pyaudio
+numpy
+scipy
+nemo-toolkit[asr]
+webrtcvad
+hydra-core
+omegaconf
+pytorch-lightning
+transformers
+sentencepiece

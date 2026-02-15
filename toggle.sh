@@ -1,83 +1,41 @@
 #!/bin/bash
 
-# --- CONFIGURATION ---
-LOGFILE="/tmp/parakeet_dictation.log"
-PIDFILE="/tmp/parakeet_rec.pid"
-AUDIOFILE="/tmp/parakeet_audio.wav"
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_CMD="python"
-TRANSCRIBE_SCRIPT="$PROJECT_DIR/transcribe.py"
+# Configuration
+DIR="/mnt/windows/Projects/Programming/parakeet-dictation"
+PID_FILE="/tmp/voicetype.pid"
+VENV_PYTHON="$DIR/.venv/bin/python3"
+SCRIPT="$DIR/voicetype.py"
+LOG_FILE="/tmp/voicetype.log"
 
-# Environment variables for KDE/D-Bus
 export DISPLAY=:0
-export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+export XAUTHORITY=$HOME/.Xauthority
 
-# Helper: Send notifications
-send_notify() {
-    notify-send -u low -t 2000 "$1" "$2"
-}
-
-# --- LOGIC ---
-
-# 1. STOP MODE: If PID file exists, stop recording and transcribe
-if [ -f "$PIDFILE" ]; then
-    PID=$(cat "$PIDFILE")
-    
-    if kill -0 "$PID" 2>/dev/null; then
-        echo "Stopping recording (PID $PID)..." >> "$LOGFILE"
+if [ -f "$PID_FILE" ]; then
+    PID=$(cat "$PID_FILE")
+    if ps -p $PID > /dev/null; then
+        echo "Sending stop signal to $PID..." >> $LOG_FILE
+        # Notify user instantly that we registered the stop
+        notify-send "Voice Typing" "Stopping recording..." -i media-playback-stop
+        kill -INT $PID
         
-        # Give a small buffer for audio to finalize
-        sleep 0.5
-        kill -SIGINT "$PID"
-        
-        # Wait until process ends
-        tail --pid=$PID -f /dev/null 2>/dev/null
-        rm -f "$PIDFILE"
-        
-        send_notify "🧠 Transcribing..." "NVIDIA Parakeet is working..."
-        
-        # Transcribe
-        TEXT=$("$PYTHON_CMD" "$TRANSCRIBE_SCRIPT" --input "$AUDIOFILE" 2>>"$LOGFILE")
-        
-        if [ ! -z "$TEXT" ]; then
-            # Copy to clipboard and type it
-            if command -v xclip &> /dev/null; then
-                echo -n "$TEXT " | xclip -selection clipboard -f
-            elif command -v wl-copy &> /dev/null; then
-                echo -n "$TEXT " | wl-copy
-            else
-                # Fallback to direct typing if clipboard tools are missing
-                xdotool type --clearmodifiers --delay 0 "$TEXT "
+        # Wait for process to finish
+        for i in {1..10}; do
+            if ! ps -p $PID > /dev/null; then
+                rm "$PID_FILE"
                 exit 0
             fi
-            
-            # Simulate paste
-            sleep 0.1
-            xdotool key --clearmodifiers Control+v
-            send_notify "✅ Done" "Dictation inserted."
-        else
-            send_notify "🤷 Empty" "No text recognized."
-        fi
+            sleep 1
+        done
         
-        rm -f "$AUDIOFILE"
+        # Force kill if still stuck
+        kill -9 $PID
+        rm "$PID_FILE"
         exit 0
-    else
-        # Stale PID file
-        rm -f "$PIDFILE"
     fi
+    rm "$PID_FILE"
 fi
 
-# 2. START MODE: Start recording
-rm -f "$AUDIOFILE"
-rec -q "$AUDIOFILE" rate 16k &
-NEW_PID=$!
-
-# Verify it started correctly
-sleep 0.3
-if ! kill -0 "$NEW_PID" 2>/dev/null; then
-    send_notify "❌ Error" "Could not start recording (Microphone busy?)."
-    exit 1
-fi
-
-echo $NEW_PID > "$PIDFILE"
-send_notify "🎙️ Recording..." "Press shortcut again to stop"
+# Start the script in the background
+$VENV_PYTHON $SCRIPT >> $LOG_FILE 2>&1 &
+echo $! > "$PID_FILE"
+echo "Started process $! at $(date)" >> $LOG_FILE
